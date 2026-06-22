@@ -1,12 +1,12 @@
-echo "Waiting 9 hours before training..."
-sleep 32400
+# echo "Waiting 9 hours before training..."
+# sleep 32400
 export PYTHONPATH="./:$PYTHONPATH"
 export NCCL_P2P_LEVEL=NVL
-CUDA_VISIBLE_DEVICES=1,2,3 deepspeed --master_port 25420 src/train/train.py \
+CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --master_port 25420 src/train/train.py \
     --deepspeed scripts/zero2.json \
-    --dataset_name data/navida_train_data/r2r_vln_idm.jsonl \
-    --model_name_or_path /data2/haonan/NaVIDA/checkpoint \
-    --num_train_epochs 1 \
+    --dataset_name data/navida_train_data/r2r_vln.jsonl \
+    --model_name_or_path /data1/haonan/NaVIDA/checkpoint \
+    --num_train_epochs 2 \
     --bf16 \
     --torch_dtype bfloat16 \
     --attn_implementation flash_attention_2 \
@@ -19,8 +19,9 @@ CUDA_VISIBLE_DEVICES=1,2,3 deepspeed --master_port 25420 src/train/train.py \
     --learning_rate 1.0e-5 \
     --logging_steps 5 \
     --eval_strategy steps \
-    --eval_steps 500 \
+    --eval_steps 100 \
     --save_strategy steps \
-    --save_steps 500 \
-    --output_dir result/r2r_vln_idm \
-    --report_to tensorboard
+    --save_steps 1000 \
+    --output_dir result/r2r_vln_2 \
+    --report_to tensorboard \
+    --warmup_ratio 0.05

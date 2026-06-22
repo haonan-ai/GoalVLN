@@ -2,4 +2,4 @@ export PYTHONPATH="./:$PYTHONPATH"
 
 CUDA_VISIBLE_DEVICES=0 python3 src/data/extract_frame.py \
     --dataset_name r2r \
-    --num_thread 16
+    --num_thread 64

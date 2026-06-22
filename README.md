@@ -36,12 +36,20 @@ pip install "fastapi<0.137"
 ```
 
 # Evaluation
-
+```bash
+ln -s /data1/haonan/NaVIDA/eval_log eval_log
+```
 ## Option 1
 ```bash
 ./scripts/eval.sh
 
+python src/eval/analyze_results.py \
+    --path 
+
 python src/eval/list_failed_episodes.py --path eval_log/navida_r2r
+
+python src/eval/sample_episodes.py \
+    --output data/selected_episodes_val_unseen_200.txt
 ```
 
 ## Option 2
@@ -57,22 +65,24 @@ Step 2: Run Evaluation
 
 # Data
 ```bash
-mkdir -p /data2/haonan/NaVIDA/data/sub_dataset
-ln -s /data2/haonan/NaVIDA/data/sub_dataset data/sub_dataset
+mkdir -p /data1/haonan/NaVIDA/data/sub_dataset
+ln -s /data1/haonan/NaVIDA/data/sub_dataset data/sub_dataset
 ./scripts/preprocess.sh
 
-mkdir -p /data2/haonan/NaVIDA/data/images
-ln -s /data2/haonan/NaVIDA/data/images data/images
+mkdir -p /data1/haonan/NaVIDA/data/images
+ln -s /data1/haonan/NaVIDA/data/images data/images
+mkdir -p /data2/haonan/NaVIDA/data/poses
+ln -s /data2/haonan/NaVIDA/data/poses data/poses
 ./scripts/extract_frame.sh
 
-mkdir -p /data2/haonan/NaVIDA/data/navida_train_data
-ln -s /data2/haonan/NaVIDA/data/navida_train_data data/navida_train_data
+mkdir -p /data1/haonan/NaVIDA/data/navida_train_data
+ln -s /data1/haonan/NaVIDA/data/navida_train_data data/navida_train_data
 ./scripts/prepare_training_data.sh
 ```
 
 # Train
 ```bash
-mkdir -p /data2/haonan/NaVIDA/result
-ln -s /data2/haonan/NaVIDA/result result
+mkdir -p /data1/haonan/NaVIDA/result
+ln -s /data1/haonan/NaVIDA/result result
 ./scripts/train.sh
 ```

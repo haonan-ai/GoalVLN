@@ -103,7 +103,7 @@ def convert_example(example):
 
         content = []
 
-        if example['task type'] == 'vln':
+        if example['task type'] in ('vln', 'goal'):
             content.append({"type": "text", "text": 'Imagine you are a robot programmed for navigation tasks. You have been given a video of historical observations'})
             if len(example["conversations"][i]["image"]) > 1:
                 content.extend([{"type": "image", "image": item} for item in uniform_sample_with_ends(example["conversations"][i]["image"][:-1],8)])

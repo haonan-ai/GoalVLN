@@ -1,5 +1,5 @@
-eval_log
+/eval_log
 *.pyc
-data
-result
-.cache
+/data
+/result
+/.cache/

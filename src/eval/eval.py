@@ -5,6 +5,7 @@ from habitat.core.agent import Agent
 from tqdm import trange
 import os, io
 import re
+import shutil
 import torch
 import cv2
 import imageio
@@ -26,6 +27,7 @@ from peft import PeftModel
 from vllm.multimodal.utils import encode_image_base64
 
 SYSTEM_PROMPT = "You are a helpful assistant."
+DEFAULT_BASE_MODEL_PATH = "/data1/haonan/NaVIDA/checkpoint"
 
 
 def action_id_to_str(action_id):
@@ -77,8 +79,27 @@ def filter_dataset_by_episode_ids(dataset, episode_ids_file):
     return dataset
 
 
+def sync_missing_model_files(model_path, base_model_path):
+    if not base_model_path or not os.path.isdir(base_model_path):
+        return
+    if os.path.abspath(model_path) == os.path.abspath(base_model_path):
+        return
+
+    os.makedirs(model_path, exist_ok=True)
+    for name in os.listdir(base_model_path):
+        src = os.path.join(base_model_path, name)
+        dst = os.path.join(model_path, name)
+        if os.path.exists(dst):
+            continue
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+        print(f"Copied missing model file: {name}")
+
+
 def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path, num_generations,
-                    forward_distance, turn_angle, max_action_history, resolution_ratio, rerun=False) -> None:
+                    forward_distance, turn_angle, max_action_history, resolution_ratio, force_reeval=False) -> None:
  
     env = Env(config.habitat, dataset)
 
@@ -108,7 +129,7 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
         continuse_rotation_count = 0
         last_dtg = 999
         stats_path = os.path.join(result_path, "log", f"stats_{env.current_episode.episode_id}.json")
-        if not rerun and os.path.exists(stats_path):
+        if not force_reeval and os.path.exists(stats_path):
             continue
         while not env.episode_over:
             
@@ -451,12 +472,29 @@ def main():
         "--episode-ids-file",
         type=str,
         default=None,
-        help="path to a file with one episode id per line; only these episodes will be evaluated",
+        help="path to a file with one episode id per line; only evaluate these episodes (re-evaluates even if results exist)",
+    )
+    parser.add_argument("--max-episodes", type=int, default=None, help="maximum number of episodes to evaluate")
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default=None,
+        help="dataset split to evaluate, e.g. val_unseen, val_seen, train",
+    )
+    parser.add_argument(
+        "--base-model-path",
+        type=str,
+        default=DEFAULT_BASE_MODEL_PATH,
+        help="fallback path to copy missing tokenizer/processor files from",
     )
     args = parser.parse_args()
 
+    sync_missing_model_files(args.model_path, args.base_model_path)
+
     config = get_config(args.exp_config)
     with habitat.config.read_write(config):
+        if args.dataset_split is not None:
+            config.habitat.dataset.split = args.dataset_split
         # self.config.habitat.task.measurements.success.success_distance=3.0
         config.habitat.task.measurements.update(
             {
@@ -481,16 +519,20 @@ def main():
             
     dataset = habitat.datasets.make_dataset(id_dataset=config.habitat.dataset.type, config=config.habitat.dataset)
 
-    rerun = args.episode_ids_file is not None
-    if rerun:
+    use_episode_subset = args.episode_ids_file is not None
+    if use_episode_subset:
         filter_dataset_by_episode_ids(dataset, args.episode_ids_file)
+    if args.max_episodes is not None:
+        dataset.episodes = dataset.episodes[:args.max_episodes]
+    if len(dataset.episodes) == 0:
+        raise ValueError("No episodes to evaluate.")
 
     split_num = min(args.split_num, len(dataset.episodes))
     dataset_split = dataset.get_splits(split_num, allow_uneven_splits=True)[args.split_id]
 
     evaluate_agent(config, args.split_id, dataset_split, args.model_path, args.lora_path, args.result_path,
                 args.num_generations, args.forward_distance, args.turn_angle, args.max_action_history,
-                args.resolution_ratio, rerun=rerun)
+                args.resolution_ratio, force_reeval=use_episode_subset)
 
 if __name__ == "__main__":
     main()
