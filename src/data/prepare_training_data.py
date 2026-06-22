@@ -104,25 +104,6 @@ config = {
 }
 
 
-def angle_to_direction_word(angle_deg):
-    angle_deg = (angle_deg + 360) % 360
-    if angle_deg <= 22.5 or angle_deg > 337.5:
-        return "ahead"
-    if angle_deg <= 67.5:
-        return "front-left"
-    if angle_deg <= 112.5:
-        return "left"
-    if angle_deg <= 157.5:
-        return "back-left"
-    if angle_deg <= 202.5:
-        return "behind"
-    if angle_deg <= 247.5:
-        return "back-right"
-    if angle_deg <= 292.5:
-        return "right"
-    return "front-right"
-
-
 def format_goal_hint(current_pose, goal_pose):
     current_position = np.array(current_pose["position"], dtype=np.float64)
     goal_position = np.array(goal_pose["position"], dtype=np.float64)
@@ -139,15 +120,10 @@ def format_goal_hint(current_pose, goal_pose):
     y_abs = abs(y_lateral)
     front_or_back = "front" if x_forward >= 0 else "back"
     left_or_right = "left" if y_lateral >= 0 else "right"
-    distance = float(np.linalg.norm(direction_vector[[0, 2]]))
-    direction_word = angle_to_direction_word(
-        float(np.degrees(np.arctan2(y_lateral, x_forward)))
-    )
 
     return (
         f"Goal hint: Relative to the robot, the goal is {x_abs:.1f} m {front_or_back} "
-        f"and {y_abs:.1f} m to the {left_or_right}. Distance: {distance:.1f} m. "
-        f"Direction: {direction_word}."
+        f"and {y_abs:.1f} m to the {left_or_right}."
     )
 
 
