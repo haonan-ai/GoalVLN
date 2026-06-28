@@ -50,6 +50,8 @@ python src/eval/list_failed_episodes.py --path eval_log/navida_r2r
 
 python src/eval/sample_episodes.py \
     --output data/selected_episodes_val_unseen_200.txt
+
+python src/eval/summarize_results.py --path eval_log
 ```
 
 ## Option 2

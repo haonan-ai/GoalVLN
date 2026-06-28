@@ -1,6 +1,11 @@
 #!/bin/bash
+# echo "Waiting 9 hours before training..."
+# sleep 32400
 SELECTED_EPISODES_FILE="data/selected_episodes_val_unseen_200.txt"
-DATASET_SPLIT=val_unseen
+# DATASET_SPLIT=val_unseen
+# MAX_EPISODES=200
+USE_GOAL_HINT=false
+
 BASE_MODEL_PATH="/data1/haonan/NaVIDA/checkpoint"
 export PYTHONPATH=`pwd`:$PYTHONPATH
 
@@ -8,16 +13,14 @@ CONFIG_PATH="config/vln_r2r.yaml"
 EVAL_LOG_ROOT="eval_log"
 
 CHECKPOINTS=(
-    /data1/haonan/NaVIDA/checkpoint
-    result/r2r_vln/checkpoint-500
-    result/r2r_vln/checkpoint-1000
-    result/r2r_vln/checkpoint-1500
-    result/r2r_vln/checkpoint-2000
+    result/r2r_vln_idm/checkpoint-1000
+    result/r2r_vln_idm/checkpoint-2000
+    result/r2r_vln_idm/checkpoint-3000
+    result/r2r_vln_idm/checkpoint-4000
 )
 
 CHUNKS=8
 gpus=(0 0 1 1 2 2 3 3)
-MAX_EPISODES=200
 
 EXTRA_ARGS=()
 if [ -n "$SELECTED_EPISODES_FILE" ]; then
@@ -28,6 +31,9 @@ if [ -n "$MAX_EPISODES" ]; then
 fi
 if [ -n "$DATASET_SPLIT" ]; then
     EXTRA_ARGS+=(--dataset-split "$DATASET_SPLIT")
+fi
+if [ "$USE_GOAL_HINT" = true ]; then
+    EXTRA_ARGS+=(--use-goal-hint true)
 fi
 
 sync_missing_model_files() {
@@ -48,8 +54,9 @@ sync_missing_model_files() {
 }
 
 for MODEL_PATH in "${CHECKPOINTS[@]}"; do
+    EXPERIMENT_NAME=$(basename "$(dirname "$MODEL_PATH")")
     CHECKPOINT_NAME=$(basename "$MODEL_PATH")
-    SAVE_PATH="${EVAL_LOG_ROOT}/${CHECKPOINT_NAME}"
+    SAVE_PATH="${EVAL_LOG_ROOT}/${EXPERIMENT_NAME}/${CHECKPOINT_NAME}"
 
     echo "========================================"
     echo "Evaluating checkpoint: $MODEL_PATH"

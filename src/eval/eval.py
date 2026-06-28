@@ -10,6 +10,7 @@ import torch
 import cv2
 import imageio
 from habitat.utils.visualizations import maps
+from habitat.utils.geometry_utils import quaternion_from_coeff, quaternion_rotate_vector, quaternion_to_list
 import random
 from transformers import Qwen2VLForConditionalGeneration, Qwen2_5_VLForConditionalGeneration, AutoProcessor, GenerationConfig
 import argparse, habitat
@@ -79,6 +80,36 @@ def filter_dataset_by_episode_ids(dataset, episode_ids_file):
     return dataset
 
 
+def agent_state_to_pose(agent_state):
+    return {
+        "position": np.array(agent_state.position, dtype=np.float64).tolist(),
+        "rotation": quaternion_to_list(agent_state.rotation),
+    }
+
+
+def format_goal_hint(current_pose, goal_pose):
+    current_position = np.array(current_pose["position"], dtype=np.float64)
+    goal_position = np.array(goal_pose["position"], dtype=np.float64)
+    current_rotation = quaternion_from_coeff(current_pose["rotation"])
+
+    direction_vector = goal_position - current_position
+    direction_vector_agent = quaternion_rotate_vector(
+        current_rotation.inverse(), direction_vector
+    )
+
+    x_forward = -direction_vector_agent[2]
+    y_lateral = -direction_vector_agent[0]
+    x_abs = abs(x_forward)
+    y_abs = abs(y_lateral)
+    front_or_back = "front" if x_forward >= 0 else "back"
+    left_or_right = "left" if y_lateral >= 0 else "right"
+
+    return (
+        f"Goal hint: Relative to the robot, the goal is {x_abs:.1f} m {front_or_back} "
+        f"and {y_abs:.1f} m to the {left_or_right}."
+    )
+
+
 def sync_missing_model_files(model_path, base_model_path):
     if not base_model_path or not os.path.isdir(base_model_path):
         return
@@ -99,7 +130,8 @@ def sync_missing_model_files(model_path, base_model_path):
 
 
 def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path, num_generations,
-                    forward_distance, turn_angle, max_action_history, resolution_ratio, force_reeval=False) -> None:
+                    forward_distance, turn_angle, max_action_history, resolution_ratio,
+                    use_goal_hint=False, force_reeval=False) -> None:
  
     env = Env(config.habitat, dataset)
 
@@ -110,7 +142,8 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
                         turn_angle, 
                         max_action_history, 
                         resolution_ratio, 
-                        num_generations)
+                        num_generations,
+                        use_goal_hint=use_goal_hint)
 
     num_episodes = len(env.episodes)
     
@@ -142,7 +175,7 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
                 continuse_rotation_count +=1 
             
             
-            action = agent.act(obs, info, env.current_episode.episode_id)
+            action = agent.act(obs, info, env.current_episode.episode_id, env)
 
             if continuse_rotation_count > EARLY_STOP_ROTATION or iter_step>EARLY_STOP_STEPS:
                 action = {"action": 0}
@@ -163,7 +196,8 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
 
 class NaVIDA_Agent(Agent):
     def __init__(self, model_path, lora_path, result_path, forward_distance, 
-                    turn_angle, max_action_history, resolution_ratio, num_generations = 1, require_map=True):
+                    turn_angle, max_action_history, resolution_ratio, num_generations = 1,
+                    require_map=True, use_goal_hint=False):
         
         print("Initialize NaVIDA")
         
@@ -174,6 +208,7 @@ class NaVIDA_Agent(Agent):
         self.resolution_ratio = resolution_ratio
         self.max_action_history = max_action_history
         self.num_generations = num_generations
+        self.use_goal_hint = use_goal_hint
         os.makedirs(self.result_path, exist_ok=True)
         os.makedirs(os.path.join(self.result_path, "log"), exist_ok=True)
         os.makedirs(os.path.join(self.result_path, "video"), exist_ok=True)
@@ -368,7 +403,7 @@ class NaVIDA_Agent(Agent):
             "role": "system",
             "content": [{"type": "text", "text": SYSTEM_PROMPT}]})
         
-    def act(self, observations, info, episode_id):
+    def act(self, observations, info, episode_id, env=None):
 
         self.episode_id = episode_id
         rgb = observations["rgb"]
@@ -406,7 +441,14 @@ class NaVIDA_Agent(Agent):
         content.append({"type": "text", "text": 'and an image of the current observation'})
         content.append({"type": "image_url", "image_url": f"data:image/jpeg;base64,{encode_image_base64(self.rgb_list[-1])}"})
         item = self.promt_template.format(observations["instruction"]["text"]).split('current observation')
-        content.append({"type": "text", "text": item[1]})
+        instruction_suffix = item[1]
+        if self.use_goal_hint:
+            if env is None:
+                raise ValueError("env is required when --use-goal-hint is enabled")
+            current_pose = agent_state_to_pose(env.sim.get_agent_state())
+            goal_pose = {"position": list(env.current_episode.goals[0].position)}
+            instruction_suffix = f"{instruction_suffix.strip()} {format_goal_hint(current_pose, goal_pose)}"
+        content.append({"type": "text", "text": instruction_suffix})
 
 
         self.conversations.append({
@@ -487,6 +529,12 @@ def main():
         default=DEFAULT_BASE_MODEL_PATH,
         help="fallback path to copy missing tokenizer/processor files from",
     )
+    parser.add_argument(
+        "--use-goal-hint",
+        type=str2bool,
+        default=False,
+        help="append oracle goal position hint to the instruction prompt (matches goal training data)",
+    )
     args = parser.parse_args()
 
     sync_missing_model_files(args.model_path, args.base_model_path)
@@ -532,7 +580,7 @@ def main():
 
     evaluate_agent(config, args.split_id, dataset_split, args.model_path, args.lora_path, args.result_path,
                 args.num_generations, args.forward_distance, args.turn_angle, args.max_action_history,
-                args.resolution_ratio, force_reeval=use_episode_subset)
+                args.resolution_ratio, use_goal_hint=args.use_goal_hint, force_reeval=use_episode_subset)
 
 if __name__ == "__main__":
     main()
