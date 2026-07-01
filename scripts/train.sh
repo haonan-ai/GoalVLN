@@ -5,7 +5,7 @@ export NCCL_P2P_LEVEL=NVL
 CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --master_port 25420 src/train/train.py \
     --deepspeed scripts/zero2.json \
     --dataset_name data/navida_train_data/r2r_vln_goal.jsonl \
-    --model_name_or_path checkpoint/navida \
+    --model_name_or_path checkpoint/Qwen2.5-VL-3B-Instruct \
     --num_train_epochs 1 \
     --bf16 \
     --torch_dtype bfloat16 \
@@ -22,6 +22,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --master_port 25420 src/train/train.py \
     --eval_steps 500 \
     --save_strategy steps \
     --save_steps 1000 \
-    --output_dir result/r2r_goal \
+    --output_dir result/r2r_vln_goal_qwen \
     --report_to tensorboard \
     --warmup_ratio 0.05

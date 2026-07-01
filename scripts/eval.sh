@@ -5,18 +5,20 @@ SELECTED_EPISODES_FILE="data/selected_episodes_val_unseen_200.txt"
 # DATASET_SPLIT=val_unseen
 # MAX_EPISODES=200
 USE_GOAL_HINT=false
+SAVE_GIF=true
 
-BASE_MODEL_PATH="/data1/haonan/NaVIDA/checkpoint"
+BASE_MODEL_PATH="checkpoint/navida"
 export PYTHONPATH=`pwd`:$PYTHONPATH
 
 CONFIG_PATH="config/vln_r2r.yaml"
 EVAL_LOG_ROOT="eval_log"
 
 CHECKPOINTS=(
-    result/r2r_vln_idm/checkpoint-1000
-    result/r2r_vln_idm/checkpoint-2000
-    result/r2r_vln_idm/checkpoint-3000
-    result/r2r_vln_idm/checkpoint-4000
+    result/distill_opd0/checkpoint-50
+    result/distill_opd0/checkpoint-100
+    result/distill_opd0/checkpoint-150
+    result/distill_opd0/checkpoint-200
+    result/distill_opd0/checkpoint-250
 )
 
 CHUNKS=8
@@ -35,6 +37,7 @@ fi
 if [ "$USE_GOAL_HINT" = true ]; then
     EXTRA_ARGS+=(--use-goal-hint true)
 fi
+EXTRA_ARGS+=(--save-gif "$SAVE_GIF")
 
 sync_missing_model_files() {
     local target="$1"

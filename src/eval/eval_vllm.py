@@ -9,6 +9,7 @@ from tqdm import tqdm
 import cv2
 import imageio
 from habitat.utils.visualizations import maps
+from habitat.utils.geometry_utils import quaternion_from_coeff, quaternion_rotate_vector, quaternion_to_list
 import random
 from vllm import SamplingParams
 import argparse, habitat
@@ -22,6 +23,7 @@ from habitat.config.default_structured_configs import (
 from PIL import Image, ImageFont, ImageDraw
 from qwen_vl_utils import process_vision_info
 import multiprocessing as mp
+import queue
 import time, math
 from openai import OpenAI
 from vllm.multimodal.utils import encode_image_base64
@@ -43,8 +45,60 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+
+def load_episode_ids(path):
+    with open(path) as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def filter_dataset_by_episode_ids(dataset, episode_ids_file):
+    target_ids = load_episode_ids(episode_ids_file)
+    filtered = [
+        ep for ep in dataset.episodes if str(ep.episode_id) in target_ids
+    ]
+    if not filtered:
+        raise ValueError(f"No episodes matched IDs in {episode_ids_file}")
+    found_ids = {str(ep.episode_id) for ep in filtered}
+    missing = target_ids - found_ids
+    if missing:
+        print(f"Warning: {len(missing)} IDs from file not found in dataset")
+    dataset.episodes = filtered
+    return dataset
+
+
+def agent_state_to_pose(agent_state):
+    return {
+        "position": np.array(agent_state.position, dtype=np.float64).tolist(),
+        "rotation": quaternion_to_list(agent_state.rotation),
+    }
+
+
+def format_goal_hint(current_pose, goal_pose):
+    current_position = np.array(current_pose["position"], dtype=np.float64)
+    goal_position = np.array(goal_pose["position"], dtype=np.float64)
+    current_rotation = quaternion_from_coeff(current_pose["rotation"])
+
+    direction_vector = goal_position - current_position
+    direction_vector_agent = quaternion_rotate_vector(
+        current_rotation.inverse(), direction_vector
+    )
+
+    x_forward = -direction_vector_agent[2]
+    y_lateral = -direction_vector_agent[0]
+    x_abs = abs(x_forward)
+    y_abs = abs(y_lateral)
+    front_or_back = "front" if x_forward >= 0 else "back"
+    left_or_right = "left" if y_lateral >= 0 else "right"
+
+    return (
+        f"Goal hint: Relative to the robot, the goal is {x_abs:.1f} m {front_or_back} "
+        f"and {y_abs:.1f} m to the {left_or_right}."
+    )
+
+
 def evaluate_agent(result_queue, api_key, base_url, config, dataset, result_path, num_generations,
-                    forward_distance, turn_angle, max_action_history, resolution_ratio) -> None:
+                    forward_distance, turn_angle, max_action_history, resolution_ratio,
+                    use_goal_hint=False, save_gif=True, force_reeval=False) -> None:
  
     env = Env(config.habitat, dataset)
 
@@ -56,7 +110,9 @@ def evaluate_agent(result_queue, api_key, base_url, config, dataset, result_path
         turn_angle, 
         max_action_history, 
         resolution_ratio, 
-        num_generations)
+        num_generations,
+        use_goal_hint=use_goal_hint,
+        save_gif=save_gif)
 
     num_episodes = len(env.episodes)
     
@@ -80,7 +136,9 @@ def evaluate_agent(result_queue, api_key, base_url, config, dataset, result_path
 
         continuse_rotation_count = 0
         last_dtg = 999
-        if os.path.exists(os.path.join(os.path.join(result_path, "log"),"stats_{}.json".format(env.current_episode.episode_id))):
+        stats_path = os.path.join(result_path, "log", f"stats_{env.current_episode.episode_id}.json")
+        if not force_reeval and os.path.exists(stats_path):
+            result_queue.put({"t_episode": 0})
             continue
         while not env.episode_over:
             
@@ -93,7 +151,7 @@ def evaluate_agent(result_queue, api_key, base_url, config, dataset, result_path
                 continuse_rotation_count +=1 
             
             
-            action = agent.act(obs, info, env.current_episode.episode_id)
+            action = agent.act(obs, info, env.current_episode.episode_id, env)
 
             if continuse_rotation_count > EARLY_STOP_ROTATION or iter_step>EARLY_STOP_STEPS:
                 action = {"action": 0}
@@ -118,20 +176,24 @@ def evaluate_agent(result_queue, api_key, base_url, config, dataset, result_path
 
 class NaVIDA_Agent(Agent):
     def __init__(self, api_key, base_url, result_path, forward_distance, 
-                    turn_angle, max_action_history, resolution_ratio, num_generations = 1, require_map=True):
+                    turn_angle, max_action_history, resolution_ratio, num_generations = 1,
+                    save_gif=True, use_goal_hint=False):
         
         print("Initialize NaVIDA")
         
         self.result_path = result_path
-        self.require_map = require_map
+        self.save_gif = save_gif
+        self.require_map = save_gif
         self.forward_distance = forward_distance
         self.turn_angle = turn_angle
         self.resolution_ratio = resolution_ratio
         self.max_action_history = max_action_history
         self.num_generations = num_generations
+        self.use_goal_hint = use_goal_hint
         os.makedirs(self.result_path, exist_ok=True)
         os.makedirs(os.path.join(self.result_path, "log"), exist_ok=True)
-        os.makedirs(os.path.join(self.result_path, "video"), exist_ok=True)
+        if self.save_gif:
+            os.makedirs(os.path.join(self.result_path, "video"), exist_ok=True)
 
         self.client = OpenAI(
             api_key=api_key,
@@ -272,7 +334,7 @@ class NaVIDA_Agent(Agent):
             raise ValueError(f"Invalid action ID: {action_id}")
         
     def save_episode_video(self):
-        if not self.require_map or len(self.topdown_map_list) == 0:
+        if not self.save_gif or len(self.topdown_map_list) == 0:
             return
         output_video_path = os.path.join(
             self.result_path, "video", "{}.gif".format(self.episode_id))
@@ -289,7 +351,7 @@ class NaVIDA_Agent(Agent):
             "role": "system",
             "content": [{"type": "text", "text": SYSTEM_PROMPT}]})
         
-    def act(self, observations, info, episode_id):
+    def act(self, observations, info, episode_id, env=None):
 
         self.episode_id = episode_id
         rgb = observations["rgb"]
@@ -326,7 +388,14 @@ class NaVIDA_Agent(Agent):
         content.append({"type": "text", "text": 'and an image of the current observation'})
         content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encode_image_base64(self.rgb_list[-1])}"}})
         item = self.promt_template.format(observations["instruction"]["text"]).split('current observation')
-        content.append({"type": "text", "text": item[1]})
+        instruction_suffix = item[1]
+        if self.use_goal_hint:
+            if env is None:
+                raise ValueError("env is required when --use-goal-hint is enabled")
+            current_pose = agent_state_to_pose(env.sim.get_agent_state())
+            goal_pose = {"position": list(env.current_episode.goals[0].position)}
+            instruction_suffix = f"{instruction_suffix.strip()} {format_goal_hint(current_pose, goal_pose)}"
+        content.append({"type": "text", "text": instruction_suffix})
 
 
         self.conversations.append({
@@ -376,6 +445,7 @@ def main():
 
     parser.add_argument("--exp-config",type=str,required=True,help="path to config yaml containing info about experiment")
     parser.add_argument("--split-num",type=int,required=True,help="chunks of evluation")
+    parser.add_argument("--split-id",type=int,default=None,help="chunk ID; if set, run only this shard (single process)")
     parser.add_argument("--resolution-ratio",type=float,help="location of model weights",default=0.5)
     parser.add_argument("--result-path",type=str,required=True,help="location to save results")
     parser.add_argument("--forward-distance",type=int,help="distance that one forward action takes",default=25)
@@ -383,6 +453,30 @@ def main():
     parser.add_argument("--max-action-history",type=int,help="the maximum num of action history",default=10)
     parser.add_argument("--num-generations",type=int,help="whether use video or multi image",default=1)
     parser.add_argument("--max-episodes",type=int,default=None,help="maximum number of episodes to evaluate")
+    parser.add_argument(
+        "--episode-ids-file",
+        type=str,
+        default=None,
+        help="path to a file with one episode id per line; only evaluate these episodes (re-evaluates even if results exist)",
+    )
+    parser.add_argument(
+        "--dataset-split",
+        type=str,
+        default=None,
+        help="dataset split to evaluate, e.g. val_unseen, val_seen, train",
+    )
+    parser.add_argument(
+        "--use-goal-hint",
+        type=str2bool,
+        default=False,
+        help="append oracle goal position hint to the instruction prompt (matches goal training data)",
+    )
+    parser.add_argument(
+        "--save-gif",
+        type=str2bool,
+        default=True,
+        help="whether to save episode navigation visualization as .gif under result-path/video/",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -391,6 +485,8 @@ def main():
 
     config = get_config(args.exp_config)
     with habitat.config.read_write(config):
+        if args.dataset_split is not None:
+            config.habitat.dataset.split = args.dataset_split
         # self.config.habitat.task.measurements.success.success_distance=3.0
         config.habitat.task.measurements.update(
             {
@@ -414,6 +510,10 @@ def main():
         )
             
     dataset = habitat.datasets.make_dataset(id_dataset=config.habitat.dataset.type, config=config.habitat.dataset)
+
+    use_episode_subset = args.episode_ids_file is not None
+    if use_episode_subset:
+        filter_dataset_by_episode_ids(dataset, args.episode_ids_file)
     if args.max_episodes is not None:
         dataset.episodes = dataset.episodes[:args.max_episodes]
     if len(dataset.episodes) == 0:
@@ -422,15 +522,30 @@ def main():
     split_num = min(args.split_num, len(dataset.episodes))
     dataset_splits = dataset.get_splits(split_num, allow_uneven_splits=True)
 
-    num_episodes = len(dataset.episodes) 
+    worker_args_base = (
+        args.num_generations, args.forward_distance, args.turn_angle,
+        args.max_action_history, args.resolution_ratio,
+        args.use_goal_hint, args.save_gif, use_episode_subset,
+    )
+
+    if args.split_id is not None:
+        if args.split_id < 0 or args.split_id >= split_num:
+            raise ValueError(f"split-id must be in [0, {split_num}), got {args.split_id}")
+        result_queue = queue.Queue()
+        evaluate_agent(
+            result_queue, api_key, base_url, config, dataset_splits[args.split_id],
+            args.result_path, *worker_args_base,
+        )
+        return
+
+    num_episodes = len(dataset.episodes)
 
     manager = mp.Manager()
     result_queue = manager.Queue()
     processes = []
     for i in range(split_num):
         worker_args = (result_queue, api_key, base_url, config, dataset_splits[i], args.result_path,
-                args.num_generations, args.forward_distance, args.turn_angle, 
-                args.max_action_history, args.resolution_ratio)
+                *worker_args_base)
         p = mp.Process(target=evaluate_agent, args=worker_args, daemon=True)
         p.start()
         processes.append(p)
@@ -440,7 +555,7 @@ def main():
             result = result_queue.get()
             pbar.update(1)
             pbar.set_postfix(**result)
-    
+
     for p in processes:
         p.join()
 

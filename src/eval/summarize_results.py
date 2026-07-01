@@ -47,21 +47,30 @@ def checkpoint_sort_key(name):
     return (1, name)
 
 
-def find_checkpoints(root):
+def find_runs(root):
+    """Find eval result directories under root.
+
+    Supports two layouts:
+      - exp/log/              (e.g. eval_log/distill_opd0/log/)
+      - exp/checkpoint/log/   (e.g. eval_log/distill_opd0/checkpoint-50/log/)
+    """
     root = Path(root)
-    checkpoints = []
+    runs = []
 
     for exp_dir in sorted(root.iterdir()):
         if not exp_dir.is_dir():
+            continue
+        if (exp_dir / "log").is_dir():
+            runs.append((exp_dir.name, str(exp_dir)))
             continue
         for ckpt_dir in sorted(exp_dir.iterdir(), key=lambda p: checkpoint_sort_key(p.name)):
             if not ckpt_dir.is_dir():
                 continue
             if not (ckpt_dir / "log").is_dir():
                 continue
-            checkpoints.append((f"{exp_dir.name}/{ckpt_dir.name}", str(ckpt_dir)))
+            runs.append((f"{exp_dir.name}/{ckpt_dir.name}", str(ckpt_dir)))
 
-    return checkpoints
+    return runs
 
 
 def main():
@@ -70,18 +79,18 @@ def main():
         "--path",
         type=str,
         default="eval_log",
-        help="Root directory containing experiment/checkpoint results",
+        help="Root directory containing experiment eval results",
     )
     args = parser.parse_args()
 
-    checkpoints = find_checkpoints(args.path)
-    if not checkpoints:
-        print(f"No checkpoints found under {args.path}")
+    runs = find_runs(args.path)
+    if not runs:
+        print(f"No eval results found under {args.path}")
         return
 
     rows = []
-    for name, ckpt_path in checkpoints:
-        result = analyze_checkpoint(ckpt_path)
+    for name, run_path in runs:
+        result = analyze_checkpoint(run_path)
         if result is None:
             continue
         rows.append((name, result))

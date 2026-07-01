@@ -88,3 +88,34 @@ mkdir -p /data1/haonan/NaVIDA/result
 ln -s /data1/haonan/NaVIDA/result result
 ./scripts/train.sh
 ```
+
+# distill
+## Step 1: student prefix
+```bash
+export PYTHONPATH="./:$PYTHONPATH"
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 python3 src/distill/generate_student_prefix.py \
+    --model_path checkpoint/opd0 \
+    --base_model_path checkpoint/navida \
+    --data_path data/navida_train_data/r2r_goal.jsonl \
+    --output_path data/distill/student_prefix_0.jsonl \
+    --num_samples 10000 \
+    --seed 42
+```
+
+## Step 2: teacher top-k
+```bash
+export PYTHONPATH="./:$PYTHONPATH"
+
+CUDA_VISIBLE_DEVICES=0,1,2,3 python3 src/distill/compute_teacher_topk.py \
+    --input data/distill/student_prefix_0.jsonl \
+    --output data/distill/teacher_topk_0.jsonl \
+    --teacher_model checkpoint/opd0 \
+    --base_model_path checkpoint/navida \
+    --top_k 5
+```
+
+## Step 3: opd train
+```bash
+./scripts/train_distill.sh
+```

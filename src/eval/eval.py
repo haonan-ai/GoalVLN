@@ -131,7 +131,7 @@ def sync_missing_model_files(model_path, base_model_path):
 
 def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path, num_generations,
                     forward_distance, turn_angle, max_action_history, resolution_ratio,
-                    use_goal_hint=False, force_reeval=False) -> None:
+                    use_goal_hint=False, save_gif=True, force_reeval=False) -> None:
  
     env = Env(config.habitat, dataset)
 
@@ -143,7 +143,8 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
                         max_action_history, 
                         resolution_ratio, 
                         num_generations,
-                        use_goal_hint=use_goal_hint)
+                        use_goal_hint=use_goal_hint,
+                        save_gif=save_gif)
 
     num_episodes = len(env.episodes)
     
@@ -197,12 +198,13 @@ def evaluate_agent(config, split_id, dataset, model_path, lora_path, result_path
 class NaVIDA_Agent(Agent):
     def __init__(self, model_path, lora_path, result_path, forward_distance, 
                     turn_angle, max_action_history, resolution_ratio, num_generations = 1,
-                    require_map=True, use_goal_hint=False):
+                    save_gif=True, use_goal_hint=False):
         
         print("Initialize NaVIDA")
         
         self.result_path = result_path
-        self.require_map = require_map
+        self.save_gif = save_gif
+        self.require_map = save_gif
         self.forward_distance = forward_distance
         self.turn_angle = turn_angle
         self.resolution_ratio = resolution_ratio
@@ -211,7 +213,8 @@ class NaVIDA_Agent(Agent):
         self.use_goal_hint = use_goal_hint
         os.makedirs(self.result_path, exist_ok=True)
         os.makedirs(os.path.join(self.result_path, "log"), exist_ok=True)
-        os.makedirs(os.path.join(self.result_path, "video"), exist_ok=True)
+        if self.save_gif:
+            os.makedirs(os.path.join(self.result_path, "video"), exist_ok=True)
 
         model_init_kwargs = {}
         model_init_kwargs["attn_implementation"] = "flash_attention_2"
@@ -387,7 +390,7 @@ class NaVIDA_Agent(Agent):
             raise ValueError(f"Invalid action ID: {action_id}")
         
     def save_episode_video(self):
-        if not self.require_map or len(self.topdown_map_list) == 0:
+        if not self.save_gif or len(self.topdown_map_list) == 0:
             return
         output_video_path = os.path.join(
             self.result_path, "video", "{}.gif".format(self.episode_id))
@@ -535,6 +538,12 @@ def main():
         default=False,
         help="append oracle goal position hint to the instruction prompt (matches goal training data)",
     )
+    parser.add_argument(
+        "--save-gif",
+        type=str2bool,
+        default=True,
+        help="whether to save episode navigation visualization as .gif under result-path/video/",
+    )
     args = parser.parse_args()
 
     sync_missing_model_files(args.model_path, args.base_model_path)
@@ -580,7 +589,8 @@ def main():
 
     evaluate_agent(config, args.split_id, dataset_split, args.model_path, args.lora_path, args.result_path,
                 args.num_generations, args.forward_distance, args.turn_angle, args.max_action_history,
-                args.resolution_ratio, use_goal_hint=args.use_goal_hint, force_reeval=use_episode_subset)
+                args.resolution_ratio, use_goal_hint=args.use_goal_hint, save_gif=args.save_gif,
+                force_reeval=use_episode_subset)
 
 if __name__ == "__main__":
     main()
